@@ -36,5 +36,4 @@ jupyter notebook
 - Brown & Sandholm (2019) - Pluribus
 - Zinkevich et al. (2007) - CFR Algorithm
 
-**Author**: [freya117](https://github.com/freya117)  
 **Course**: MIT 6.S890 Topics in Multiagent Learning
