@@ -57,7 +57,9 @@ class CFRSolver:
 
         for i in range(num_iterations):
             for player in range(self.game.num_players()):
-                self.cfr(self.game.new_initial_state(), player, i)
+                # Initial reach probabilities: 1.0 for everyone
+                reach_probs = np.ones(self.game.num_players())
+                self.cfr(self.game.new_initial_state(), player, i, reach_probs)
             
             if (i + 1) % log_every == 0:
                 current_policy = self.get_policy()
@@ -117,7 +119,7 @@ class CFRSolver:
                     
         return history
 
-    def cfr(self, state, player, iteration):
+    def cfr(self, state, player, iteration, reach_probs):
         if state.is_terminal():
             return state.returns()[player]
         
@@ -126,7 +128,7 @@ class CFRSolver:
             action = np.random.choice([o[0] for o in outcomes], 
                                     p=[o[1] for o in outcomes])
             state.apply_action(action)
-            return self.cfr(state, player, iteration)
+            return self.cfr(state, player, iteration, reach_probs)
         
         current_player = state.current_player()
         info_state = state.information_state_string(current_player)
@@ -144,20 +146,36 @@ class CFRSolver:
         
         for i, action in enumerate(legal_actions):
             new_state = state.child(action)
-            action_values[i] = self.cfr(new_state, player, iteration)
+            
+            new_reach_probs = reach_probs.copy()
+            new_reach_probs[current_player] *= strategy[i]
+                
+            action_values[i] = self.cfr(new_state, player, iteration, new_reach_probs)
         
         expected_value = np.dot(strategy, action_values)
         
         if current_player == player:
             regrets = action_values - expected_value
+            
+            # Counterfactual reach probability: product of all OTHER players' reach probs
+            # P_{-i} = Prod_{j != i} P_j
+            # We can calculate this by dividing total product by P_i (if P_i > 0)
+            # Or just loop and multiply. Loop is safer for zeros.
+            p_opp = 1.0
+            for p in range(self.game.num_players()):
+                if p != player:
+                    p_opp *= reach_probs[p]
+                
             for i, action in enumerate(legal_actions):
-                self.regret_sum[info_state][action] += regrets[i]
+                self.regret_sum[info_state][action] += regrets[i] * p_opp
         
         # Update strategy sum for ALL players (standard CFR)
         # Note: In some variants, we only update for the current player
         if current_player == player:
+             p_self = reach_probs[player]
+                 
              for i, action in enumerate(legal_actions):
-                self.strategy_sum[info_state][action] += strategy[i]
+                self.strategy_sum[info_state][action] += strategy[i] * p_self
         
         return expected_value
 
@@ -194,7 +212,7 @@ class CFRPlusSolver(CFRSolver):
         super().__init__(game)
         self.linear_strategy_sum = defaultdict(lambda: np.zeros(self.game.num_distinct_actions()))
 
-    def cfr(self, state, player, iteration):
+    def cfr(self, state, player, iteration, reach_probs):
         if state.is_terminal():
             return state.returns()[player]
         
@@ -203,7 +221,7 @@ class CFRPlusSolver(CFRSolver):
             action = np.random.choice([o[0] for o in outcomes], 
                                     p=[o[1] for o in outcomes])
             state.apply_action(action)
-            return self.cfr(state, player, iteration)
+            return self.cfr(state, player, iteration, reach_probs)
         
         current_player = state.current_player()
         info_state = state.information_state_string(current_player)
@@ -220,22 +238,34 @@ class CFRPlusSolver(CFRSolver):
         
         for i, action in enumerate(legal_actions):
             new_state = state.child(action)
-            action_values[i] = self.cfr(new_state, player, iteration)
+            
+            new_reach_probs = reach_probs.copy()
+            new_reach_probs[current_player] *= strategy[i]
+
+            action_values[i] = self.cfr(new_state, player, iteration, new_reach_probs)
         
         expected_value = np.dot(strategy, action_values)
         
         if current_player == player:
             regrets = action_values - expected_value
+            
+            p_opp = 1.0
+            for p in range(self.game.num_players()):
+                if p != player:
+                    p_opp *= reach_probs[p]
+
             for i, action in enumerate(legal_actions):
                 # CFR+: Add regret, then floor at 0
-                self.regret_sum[info_state][action] = max(0, self.regret_sum[info_state][action] + regrets[i])
+                self.regret_sum[info_state][action] = max(0, self.regret_sum[info_state][action] + regrets[i] * p_opp)
         
         # Linear Averaging: Weight = iteration + 1 (since iteration starts at 0)
         # Update strategy sum for the current player
         if current_player == player:
             weight = iteration + 1
+            p_self = reach_probs[player]
+            
             for i, action in enumerate(legal_actions):
-                self.linear_strategy_sum[info_state][action] += weight * strategy[i]
+                self.linear_strategy_sum[info_state][action] += weight * strategy[i] * p_self
         
         return expected_value
 
